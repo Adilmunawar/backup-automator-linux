@@ -1,33 +1,30 @@
 #!/bin/bash
+
 echo "Starting backup script..."
 
-# import variables
+# Import variables
 source config.sh
 
-# Source mount directory
-mkdir -p $shared_dir_mount_target # create the dir where will be mounted the shared network device(which is the source_dir)
-chown -R "$system_user":"$system_user" "$shared_dir_mount_target"
+# Create necessary directories and set permissions
+create_dir() {
+    mkdir -p "$1"
+    chown -R "$system_user":"$system_user" "$1"
+}
 
-# Destination directory
-mkdir -p "$destination_dir"
-chown -R "$system_user":"$system_user" "$destination_dir"
+create_dir "$shared_dir_mount_target"
+create_dir "$destination_dir"
+create_dir "$log_dir"
 
-# Log directory
-mkdir -p "$log_dir"
-chown -R "$system_user":"$system_user" "$log_dir"
-
-
-#removes old log files
-find "$log_dir" -type f -name "----*" -mtime +30 -exec rm {} \;
-
+# Remove old log files
+find "$log_dir" -type f -name "rsync_log_*" -mtime +30 -exec rm {} \;
 
 # Timestamp for the log file
 timestamp=$(date +"%Y-%m-%d-%H-%M")
 log_file="$log_dir/rsync_log_$timestamp.txt"
 
-
 echo "Variables created."
 
+# Function to display rsync messages
 display_rsync_messages() {
     while IFS= read -r line; do
         echo "$line"   # Print the rsync message to the terminal
@@ -35,38 +32,30 @@ display_rsync_messages() {
     done
 }
 
-# Check if source and destination directories are already mounted
-if [ -d "$shared_dir_source" ]; then
-    echo "Source directory already mounted."
-else
-    mount -t cifs "$shared_dir_source" "$shared_dir_mount_target" -o username="$samba_user",password="$samba_password",uid=$(id -u),gid=$(id -g)
-    if [ $? -eq 0 ]; then
-        echo "Source mount successful."
+# Function to mount directories
+mount_dir() {
+    if [ -d "$1" ]; then
+        echo "$2 directory already mounted."
     else
-        echo "Source mounting failed. Check your source path."
-        exit 1
-    fi
-fi
-
-if [ -d "$destination_dir" ]; then
-    if mountpoint -q "$destination_dir"; then
-        echo "Destiny directory already mounted."
-    else
-        mount "$destination_mount_device_location" "$destination_dir"
+        mount -t cifs "$1" "$2" -o username="$samba_user",password="$samba_password",uid=$(id -u),gid=$(id -g)
         if [ $? -eq 0 ]; then
-            echo "Destiny mount successful."
+            echo "$2 mount successful."
         else
-            echo "Destiny mounting failed. Check your destination path."
+            echo "$2 mounting failed. Check your path."
             exit 1
         fi
     fi
-fi
+}
+
+# Mount source and destination directories
+mount_dir "$shared_dir_source" "$shared_dir_mount_target"
+mount_dir "$destination_mount_device_location" "$destination_dir"
 
 # Rsync command
-# You can pass the --delete flag if you want to delete old files from the backup, but if target incorrectly the destination directory, there might be data loss in the backup
 echo "Starting rsync command..."
 rsync -av --progress --info=progress1 "$shared_dir_mount_target" "$destination_dir" 2>&1 | tee >(display_rsync_messages)
 
+# Set log file ownership
 chown "$system_user":"$system_user" "$log_file"
 
 # Check the rsync exit status
@@ -76,7 +65,10 @@ else
     echo "Rsync encountered an error. Check the log file for details: $log_file"
 fi
 
+# Unmount directories
 echo "Unmounting shared directory..."
 umount "$shared_dir_mount_target"
-echo "Unmounting destination dir..."
+echo "Unmounting destination directory..."
 umount "$destination_dir"
+
+echo "Backup script completed."
